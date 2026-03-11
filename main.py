@@ -38,6 +38,9 @@ HOUSE_NUMBER = os.getenv("HOUSE_NUMBER", "").strip()
 STREET_NAME = os.getenv("STREET_NAME", "").strip()
 ZIP_CODE = os.getenv("ZIP_CODE", "").strip()
 CALENDAR_ID = os.getenv("CALENDAR_ID", "primary").strip() or "primary"
+GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+GOOGLE_CALENDAR_OWNER_EMAIL = os.getenv("GOOGLE_CALENDAR_OWNER_EMAIL", "").strip()
 WEEKS_AHEAD = env_int("WEEKS_AHEAD", 4)
 DRY_RUN = env_bool("DRY_RUN", default=True)
 TZ = ZoneInfo("America/New_York")
@@ -110,6 +113,7 @@ EVENT_EMOJIS = {
     "recycling": "♻️",
     "yard": "🌿",
 }
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -381,6 +385,46 @@ def build_events_to_create(
             events.append(("yard", pickup_date))
 
     return sorted(events, key=lambda item: (item[1], item[0]))
+
+
+def load_service_account_info() -> dict[str, Any]:
+    """Load Google service account credentials from env JSON or a local file."""
+    if GOOGLE_SERVICE_ACCOUNT_JSON:
+        LOGGER.info("Loading Google service account credentials from GOOGLE_SERVICE_ACCOUNT_JSON.")
+        return json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+
+    if GOOGLE_SERVICE_ACCOUNT_FILE:
+        LOGGER.info(
+            "Loading Google service account credentials from file: %s",
+            GOOGLE_SERVICE_ACCOUNT_FILE,
+        )
+        with open(GOOGLE_SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+
+    raise ValueError(
+        "Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE before creating calendar events."
+    )
+
+
+def get_calendar_service() -> Any:
+    """Build an authenticated Google Calendar API client."""
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+
+    credentials_info = load_service_account_info()
+    credentials = service_account.Credentials.from_service_account_info(
+        credentials_info,
+        scopes=[GOOGLE_CALENDAR_SCOPE],
+    )
+    if GOOGLE_CALENDAR_OWNER_EMAIL:
+        credentials = credentials.with_subject(GOOGLE_CALENDAR_OWNER_EMAIL)
+
+    return build(
+        "calendar",
+        "v3",
+        credentials=credentials,
+        cache_discovery=False,
+    )
 
 
 def main() -> None:
