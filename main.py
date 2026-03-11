@@ -572,6 +572,47 @@ def main() -> None:
     for event_type, pickup_date in events_to_create:
         LOGGER.info("%s %s -> %s", EVENT_EMOJIS[event_type], event_type, pickup_date.isoformat())
 
+    if DRY_RUN:
+        LOGGER.info("DRY_RUN enabled; skipping Google Calendar authentication and writes.")
+        for event_type, pickup_date in events_to_create:
+            LOGGER.info(
+                "DRY_RUN event payload: %s",
+                json.dumps(build_event_body(event_type, pickup_date), sort_keys=True),
+            )
+        return
+
+    from googleapiclient.errors import HttpError
+
+    service = get_calendar_service()
+    created_count = 0
+    skipped_count = 0
+    error_count = 0
+
+    for event_type, pickup_date in events_to_create:
+        try:
+            created = create_pickup_event(service, event_type, pickup_date, CALENDAR_ID)
+        except HttpError as exc:
+            LOGGER.error(
+                "Failed to create %s event for %s: %s",
+                event_type,
+                pickup_date.isoformat(),
+                exc,
+            )
+            error_count += 1
+            continue
+
+        if created:
+            created_count += 1
+        else:
+            skipped_count += 1
+
+    LOGGER.info(
+        "Calendar sync complete: created=%s skipped=%s errors=%s",
+        created_count,
+        skipped_count,
+        error_count,
+    )
+
 
 if __name__ == "__main__":
     try:
