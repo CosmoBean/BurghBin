@@ -113,6 +113,16 @@ EVENT_EMOJIS = {
     "recycling": "♻️",
     "yard": "🌿",
 }
+EVENT_COLORS = {
+    "refuse": "9",
+    "recycling": "2",
+    "yard": "5",
+}
+EVENT_TITLES = {
+    "refuse": "Trash Pickup",
+    "recycling": "Recycling Pickup",
+    "yard": "Yard Waste Pickup",
+}
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
 
 logging.basicConfig(
@@ -425,6 +435,99 @@ def get_calendar_service() -> Any:
         credentials=credentials,
         cache_discovery=False,
     )
+
+
+def event_uid(event_type: str, pickup_date: date) -> str:
+    """Create a stable Google Calendar event identifier."""
+    import hashlib
+
+    raw_uid = f"pghst-{event_type}-{pickup_date.isoformat()}".encode("utf-8")
+    return hashlib.md5(raw_uid, usedforsecurity=False).hexdigest()[:24]
+
+
+def build_event_body(event_type: str, pickup_date: date) -> dict[str, Any]:
+    """Build the Google Calendar event payload."""
+    start_at = datetime(
+        pickup_date.year,
+        pickup_date.month,
+        pickup_date.day,
+        6,
+        0,
+        tzinfo=TZ,
+    )
+    end_at = start_at + timedelta(hours=1)
+    emoji = EVENT_EMOJIS[event_type]
+    title = EVENT_TITLES[event_type]
+    return {
+        "id": event_uid(event_type, pickup_date),
+        "summary": f"{emoji} {title}",
+        "description": (
+            "Pittsburgh Department of Public Works pickup reminder.\n\n"
+            "Set materials out according to local collection guidance.\n"
+            "Schedule source: PGH.ST."
+        ),
+        "start": {
+            "dateTime": start_at.isoformat(),
+            "timeZone": TZ.key,
+        },
+        "end": {
+            "dateTime": end_at.isoformat(),
+            "timeZone": TZ.key,
+        },
+        "colorId": EVENT_COLORS[event_type],
+        "reminders": {
+            "useDefault": False,
+            "overrides": [
+                {"method": "popup", "minutes": 600},
+                {"method": "popup", "minutes": 60},
+            ],
+        },
+        "transparency": "transparent",
+    }
+
+
+def create_pickup_event(
+    service: Any,
+    event_type: str,
+    pickup_date: date,
+    calendar_id: str,
+) -> bool | None:
+    """Create an event if it does not already exist."""
+    from googleapiclient.errors import HttpError
+
+    event_id = event_uid(event_type, pickup_date)
+    try:
+        service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+    except HttpError as exc:
+        if getattr(exc, "status_code", None) != 404:
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            if status != 404:
+                raise
+    else:
+        LOGGER.info(
+            "Skipping existing calendar event %s for %s on %s.",
+            event_id,
+            event_type,
+            pickup_date.isoformat(),
+        )
+        return False
+
+    event_body = build_event_body(event_type, pickup_date)
+    if DRY_RUN:
+        LOGGER.info(
+            "DRY_RUN would create calendar event: %s",
+            json.dumps(event_body, sort_keys=True),
+        )
+        return None
+
+    created_event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
+    LOGGER.info(
+        "Created calendar event %s for %s on %s.",
+        created_event.get("id", event_id),
+        event_type,
+        pickup_date.isoformat(),
+    )
+    return True
 
 
 def main() -> None:
