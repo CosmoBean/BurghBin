@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, TypedDict
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -54,6 +54,25 @@ PGHST_HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 REQUEST_TIMEOUT_SECONDS = 15
+DAY_NAME_TO_INT = {
+    "monday": 0,
+    "mon": 0,
+    "tuesday": 1,
+    "tue": 1,
+    "tues": 1,
+    "wednesday": 2,
+    "wed": 2,
+    "thursday": 3,
+    "thu": 3,
+    "thur": 3,
+    "thurs": 3,
+    "friday": 4,
+    "fri": 4,
+    "saturday": 5,
+    "sat": 5,
+    "sunday": 6,
+    "sun": 6,
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -239,6 +258,33 @@ def normalize_schedule(data: object) -> NormalizedSchedule:
     return normalized
 
 
+def parse_day(day_str: str | None) -> int | None:
+    """Parse a weekday string into Python's weekday integer."""
+    if day_str is None:
+        return None
+    normalized = day_str.strip().lower().replace(".", "")
+    if normalized.endswith("s"):
+        normalized = normalized[:-1]
+    return DAY_NAME_TO_INT.get(normalized)
+
+
+def get_upcoming_dates(
+    day_name: str | None,
+    weeks: int,
+    every_other: bool = False,
+) -> list[date]:
+    """Get upcoming pickup dates for the requested weekday."""
+    target_day = parse_day(day_name)
+    if target_day is None or weeks <= 0:
+        return []
+
+    today = datetime.now(TZ).date()
+    delta_days = (target_day - today.weekday()) % 7
+    first_date = today + timedelta(days=delta_days)
+    step_days = 14 if every_other else 7
+    return [first_date + timedelta(days=step_days * offset) for offset in range(weeks)]
+
+
 def main() -> None:
     """Run the application entrypoint."""
     LOGGER.info("pgh-trash-reminders starting...")
@@ -270,6 +316,11 @@ def main() -> None:
     LOGGER.info(
         "Parsed schedule: %s",
         json.dumps(normalized_schedule, default=json_default, sort_keys=True),
+    )
+    refuse_dates = get_upcoming_dates(normalized_schedule["refuse_day"], WEEKS_AHEAD)
+    LOGGER.info(
+        "Upcoming refuse dates: %s",
+        ", ".join(pickup_date.isoformat() for pickup_date in refuse_dates) or "<none>",
     )
 
 
