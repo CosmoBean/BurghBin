@@ -73,6 +73,38 @@ DAY_NAME_TO_INT = {
     "sunday": 6,
     "sun": 6,
 }
+HOLIDAYS_THAT_DELAY = {
+    date(2025, 1, 1),
+    date(2025, 1, 20),
+    date(2025, 2, 17),
+    date(2025, 4, 18),
+    date(2025, 5, 26),
+    date(2025, 7, 4),
+    date(2025, 9, 1),
+    date(2025, 11, 11),
+    date(2025, 11, 27),
+    date(2025, 12, 25),
+    date(2026, 1, 1),
+    date(2026, 1, 19),
+    date(2026, 2, 16),
+    date(2026, 4, 3),
+    date(2026, 5, 25),
+    date(2026, 7, 3),
+    date(2026, 9, 7),
+    date(2026, 11, 11),
+    date(2026, 11, 26),
+    date(2026, 12, 25),
+    date(2027, 1, 1),
+    date(2027, 1, 18),
+    date(2027, 2, 15),
+    date(2027, 3, 26),
+    date(2027, 5, 31),
+    date(2027, 7, 5),
+    date(2027, 9, 6),
+    date(2027, 11, 11),
+    date(2027, 11, 25),
+    date(2027, 12, 24),
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -282,7 +314,23 @@ def get_upcoming_dates(
     delta_days = (target_day - today.weekday()) % 7
     first_date = today + timedelta(days=delta_days)
     step_days = 14 if every_other else 7
-    return [first_date + timedelta(days=step_days * offset) for offset in range(weeks)]
+    return [
+        get_actual_pickup_date(first_date + timedelta(days=step_days * offset))
+        for offset in range(weeks)
+    ]
+
+
+def is_holiday_affected(pickup_date: date) -> bool:
+    """Return True when a DPW holiday delays pickup during that week."""
+    start_of_week = pickup_date - timedelta(days=pickup_date.weekday())
+    return any(start_of_week <= holiday <= pickup_date for holiday in HOLIDAYS_THAT_DELAY)
+
+
+def get_actual_pickup_date(scheduled_date: date) -> date:
+    """Shift a scheduled pickup date when a holiday delay applies."""
+    if is_holiday_affected(scheduled_date):
+        return scheduled_date + timedelta(days=1)
+    return scheduled_date
 
 
 def main() -> None:
