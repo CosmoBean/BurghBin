@@ -105,6 +105,11 @@ HOLIDAYS_THAT_DELAY = {
     date(2027, 11, 25),
     date(2027, 12, 24),
 }
+EVENT_EMOJIS = {
+    "refuse": "🗑️",
+    "recycling": "♻️",
+    "yard": "🌿",
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -304,6 +309,7 @@ def get_upcoming_dates(
     day_name: str | None,
     weeks: int,
     every_other: bool = False,
+    anchor_date: date | None = None,
 ) -> list[date]:
     """Get upcoming pickup dates for the requested weekday."""
     target_day = parse_day(day_name)
@@ -311,11 +317,21 @@ def get_upcoming_dates(
         return []
 
     today = datetime.now(TZ).date()
-    delta_days = (target_day - today.weekday()) % 7
-    first_date = today + timedelta(days=delta_days)
     step_days = 14 if every_other else 7
+    if anchor_date is not None:
+        first_scheduled_date = anchor_date
+        weekday_delta = (first_scheduled_date.weekday() - target_day) % 7
+        if weekday_delta == 1:
+            first_scheduled_date -= timedelta(days=1)
+        elif weekday_delta:
+            first_scheduled_date -= timedelta(days=weekday_delta)
+        while get_actual_pickup_date(first_scheduled_date) < today:
+            first_scheduled_date += timedelta(days=step_days)
+    else:
+        delta_days = (target_day - today.weekday()) % 7
+        first_scheduled_date = today + timedelta(days=delta_days)
     return [
-        get_actual_pickup_date(first_date + timedelta(days=step_days * offset))
+        get_actual_pickup_date(first_scheduled_date + timedelta(days=step_days * offset))
         for offset in range(weeks)
     ]
 
@@ -331,6 +347,40 @@ def get_actual_pickup_date(scheduled_date: date) -> date:
     if is_holiday_affected(scheduled_date):
         return scheduled_date + timedelta(days=1)
     return scheduled_date
+
+
+def build_events_to_create(
+    schedule: NormalizedSchedule,
+    weeks_ahead: int,
+) -> list[tuple[str, date]]:
+    """Build the ordered list of pickup events to create."""
+    events: list[tuple[str, date]] = []
+
+    for pickup_date in get_upcoming_dates(
+        schedule["refuse_day"],
+        weeks_ahead,
+        anchor_date=schedule["refuse_anchor_date"],
+    ):
+        events.append(("refuse", pickup_date))
+
+    for pickup_date in get_upcoming_dates(
+        schedule["recycling_day"],
+        weeks_ahead,
+        every_other=True,
+        anchor_date=schedule["recycling_anchor_date"],
+    ):
+        events.append(("recycling", pickup_date))
+
+    yard_dates = get_upcoming_dates(
+        schedule["yard_day"],
+        weeks_ahead,
+        anchor_date=schedule["yard_anchor_date"],
+    )
+    for pickup_date in yard_dates:
+        if 3 <= pickup_date.month <= 12:
+            events.append(("yard", pickup_date))
+
+    return sorted(events, key=lambda item: (item[1], item[0]))
 
 
 def main() -> None:
@@ -370,6 +420,10 @@ def main() -> None:
         "Upcoming refuse dates: %s",
         ", ".join(pickup_date.isoformat() for pickup_date in refuse_dates) or "<none>",
     )
+    events_to_create = build_events_to_create(normalized_schedule, WEEKS_AHEAD)
+    LOGGER.info("Planned pickup events: %s", len(events_to_create))
+    for event_type, pickup_date in events_to_create:
+        LOGGER.info("%s %s -> %s", EVENT_EMOJIS[event_type], event_type, pickup_date.isoformat())
 
 
 if __name__ == "__main__":
