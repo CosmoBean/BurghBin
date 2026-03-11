@@ -2,7 +2,7 @@ name: Sync Trash Reminders
 
 on:
   schedule:
-    - cron: "0 1 * * 1"
+    - cron: "0 5 1 * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -10,10 +10,15 @@ on:
         required: false
         default: false
         type: boolean
-      weeks_ahead:
-        description: Number of pickup occurrences to generate.
+      target_month:
+        description: Optional target month in YYYY-MM format.
         required: false
-        default: "4"
+        default: ""
+        type: string
+      attendee_emails:
+        description: Optional comma-separated attendee email override.
+        required: false
+        default: ""
         type: string
 
 jobs:
@@ -39,6 +44,7 @@ jobs:
           CALENDAR_ID: ${{ secrets.CALENDAR_ID }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_CALENDAR_OWNER_EMAIL: ${{ secrets.GOOGLE_CALENDAR_OWNER_EMAIL }}
-          WEEKS_AHEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.weeks_ahead || '4' }}
+          TARGET_MONTH: ${{ github.event_name == 'workflow_dispatch' && inputs.target_month || '' }}
+          ATTENDEE_EMAILS: ${{ github.event_name == 'workflow_dispatch' && inputs.attendee_emails || secrets.ATTENDEE_EMAILS }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
         run: python main.py
