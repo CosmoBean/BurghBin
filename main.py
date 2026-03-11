@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta
 from typing import Any, TypedDict
@@ -23,17 +24,6 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def env_int(name: str, default: int) -> int:
-    """Parse an environment variable as an integer."""
-    value = os.getenv(name)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
-
-
 HOUSE_NUMBER = os.getenv("HOUSE_NUMBER", "").strip()
 STREET_NAME = os.getenv("STREET_NAME", "").strip()
 ZIP_CODE = os.getenv("ZIP_CODE", "").strip()
@@ -41,7 +31,8 @@ CALENDAR_ID = os.getenv("CALENDAR_ID", "primary").strip() or "primary"
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GOOGLE_CALENDAR_OWNER_EMAIL = os.getenv("GOOGLE_CALENDAR_OWNER_EMAIL", "").strip()
-WEEKS_AHEAD = env_int("WEEKS_AHEAD", 4)
+TARGET_MONTH = os.getenv("TARGET_MONTH", "").strip()
+ATTENDEE_EMAILS = os.getenv("ATTENDEE_EMAILS", "").strip()
 DRY_RUN = env_bool("DRY_RUN", default=True)
 TZ = ZoneInfo("America/New_York")
 
@@ -57,6 +48,8 @@ PGHST_HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 REQUEST_TIMEOUT_SECONDS = 15
+MONTH_PATTERN = re.compile(r"^\d{4}-\d{2}$")
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 DAY_NAME_TO_INT = {
     "monday": 0,
     "mon": 0,
@@ -145,6 +138,12 @@ class NormalizedSchedule(TypedDict):
     recycling_anchor_date: date | None
     yard_anchor_date: date | None
     raw: dict[str, Any]
+
+
+class EventAttendee(TypedDict):
+    """Google Calendar attendee payload."""
+
+    email: str
 
 
 def build_locate_url(house: str, street: str, zip_code: str = "") -> str:
@@ -322,18 +321,69 @@ def parse_day(day_str: str | None) -> int | None:
     return DAY_NAME_TO_INT.get(normalized)
 
 
-def get_upcoming_dates(
-    day_name: str | None,
-    weeks: int,
-    every_other: bool = False,
-    anchor_date: date | None = None,
-) -> list[date]:
-    """Get upcoming pickup dates for the requested weekday."""
-    target_day = parse_day(day_name)
-    if target_day is None or weeks <= 0:
+def parse_target_month(target_month: str | None) -> tuple[date, date]:
+    """Return the first and last day for the selected target month."""
+    if target_month:
+        if not MONTH_PATTERN.match(target_month):
+            raise ValueError("TARGET_MONTH must use YYYY-MM format, for example 2026-03.")
+        year, month = (int(part) for part in target_month.split("-", 1))
+        if not 1 <= month <= 12:
+            raise ValueError("TARGET_MONTH month must be between 01 and 12.")
+        month_start = date(year, month, 1)
+    else:
+        now = datetime.now(TZ)
+        month_start = date(now.year, now.month, 1)
+
+    if month_start.month == 12:
+        next_month_start = date(month_start.year + 1, 1, 1)
+    else:
+        next_month_start = date(month_start.year, month_start.month + 1, 1)
+
+    return month_start, next_month_start - timedelta(days=1)
+
+
+def parse_attendee_emails(raw_emails: str | None) -> list[EventAttendee]:
+    """Parse a comma-separated attendee list into Google Calendar attendee objects."""
+    if raw_emails is None or not raw_emails.strip():
         return []
 
-    today = datetime.now(TZ).date()
+    attendees: list[EventAttendee] = []
+    seen: set[str] = set()
+    invalid: list[str] = []
+
+    for email in (item.strip() for item in raw_emails.split(",")):
+        if not email:
+            continue
+        normalized = email.lower()
+        if not EMAIL_PATTERN.match(email):
+            invalid.append(email)
+            continue
+        if normalized in seen:
+            continue
+        attendees.append({"email": email})
+        seen.add(normalized)
+
+    if invalid:
+        raise ValueError(
+            "ATTENDEE_EMAILS contains invalid email(s): " + ", ".join(sorted(invalid))
+        )
+
+    return attendees
+
+
+def get_month_pickup_dates(
+    day_name: str | None,
+    month_start: date,
+    month_end: date,
+    every_other: bool = False,
+    anchor_date: date | None = None,
+    backfill_from_anchor: bool = True,
+) -> list[date]:
+    """Get actual pickup dates that fall inside the selected month."""
+    target_day = parse_day(day_name)
+    if target_day is None or month_start > month_end:
+        return []
+
     step_days = 14 if every_other else 7
     if anchor_date is not None:
         first_scheduled_date = anchor_date
@@ -342,15 +392,26 @@ def get_upcoming_dates(
             first_scheduled_date -= timedelta(days=1)
         elif weekday_delta:
             first_scheduled_date -= timedelta(days=weekday_delta)
-        while get_actual_pickup_date(first_scheduled_date) < today:
-            first_scheduled_date += timedelta(days=step_days)
+        while backfill_from_anchor and first_scheduled_date > month_start:
+            first_scheduled_date -= timedelta(days=step_days)
     else:
-        delta_days = (target_day - today.weekday()) % 7
-        first_scheduled_date = today + timedelta(days=delta_days)
-    return [
-        get_actual_pickup_date(first_scheduled_date + timedelta(days=step_days * offset))
-        for offset in range(weeks)
-    ]
+        days_back = (month_start.weekday() - target_day) % 7
+        first_scheduled_date = month_start - timedelta(days=days_back)
+
+    while get_actual_pickup_date(first_scheduled_date) < month_start:
+        first_scheduled_date += timedelta(days=step_days)
+
+    pickup_dates: list[date] = []
+    current_scheduled_date = first_scheduled_date
+    while True:
+        actual_pickup_date = get_actual_pickup_date(current_scheduled_date)
+        if actual_pickup_date > month_end:
+            break
+        if month_start <= actual_pickup_date <= month_end:
+            pickup_dates.append(actual_pickup_date)
+        current_scheduled_date += timedelta(days=step_days)
+
+    return pickup_dates
 
 
 def is_holiday_affected(pickup_date: date) -> bool:
@@ -368,30 +429,35 @@ def get_actual_pickup_date(scheduled_date: date) -> date:
 
 def build_events_to_create(
     schedule: NormalizedSchedule,
-    weeks_ahead: int,
+    month_start: date,
+    month_end: date,
 ) -> list[tuple[str, date]]:
-    """Build the ordered list of pickup events to create."""
+    """Build the ordered list of pickup events for the selected month."""
     events: list[tuple[str, date]] = []
 
-    for pickup_date in get_upcoming_dates(
+    for pickup_date in get_month_pickup_dates(
         schedule["refuse_day"],
-        weeks_ahead,
+        month_start,
+        month_end,
         anchor_date=schedule["refuse_anchor_date"],
     ):
         events.append(("refuse", pickup_date))
 
-    for pickup_date in get_upcoming_dates(
+    for pickup_date in get_month_pickup_dates(
         schedule["recycling_day"],
-        weeks_ahead,
+        month_start,
+        month_end,
         every_other=True,
         anchor_date=schedule["recycling_anchor_date"],
     ):
         events.append(("recycling", pickup_date))
 
-    yard_dates = get_upcoming_dates(
+    yard_dates = get_month_pickup_dates(
         schedule["yard_day"],
-        weeks_ahead,
+        month_start,
+        month_end,
         anchor_date=schedule["yard_anchor_date"],
+        backfill_from_anchor=False,
     )
     for pickup_date in yard_dates:
         if 3 <= pickup_date.month <= 12:
@@ -489,12 +555,27 @@ def build_event_body(event_type: str, pickup_date: date) -> dict[str, Any]:
         "reminders": {
             "useDefault": False,
             "overrides": [
-                {"method": "popup", "minutes": 600},
+                {"method": "popup", "minutes": 480},
                 {"method": "popup", "minutes": 60},
             ],
         },
         "transparency": "transparent",
+        "guestsCanModify": False,
+        "guestsCanInviteOthers": False,
+        "guestsCanSeeOtherGuests": True,
     }
+
+
+def build_event_body_with_attendees(
+    event_type: str,
+    pickup_date: date,
+    attendees: list[EventAttendee],
+) -> dict[str, Any]:
+    """Build the event payload, including optional attendees."""
+    event_body = build_event_body(event_type, pickup_date)
+    if attendees:
+        event_body["attendees"] = attendees
+    return event_body
 
 
 def create_pickup_event(
@@ -502,6 +583,7 @@ def create_pickup_event(
     event_type: str,
     pickup_date: date,
     calendar_id: str,
+    attendees: list[EventAttendee],
 ) -> bool | None:
     """Create an event if it does not already exist."""
     from googleapiclient.errors import HttpError
@@ -523,7 +605,7 @@ def create_pickup_event(
         )
         return False
 
-    event_body = build_event_body(event_type, pickup_date)
+    event_body = build_event_body_with_attendees(event_type, pickup_date, attendees)
     if DRY_RUN:
         LOGGER.info(
             "DRY_RUN would create calendar event: %s",
@@ -531,7 +613,11 @@ def create_pickup_event(
         )
         return None
 
-    created_event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
+    created_event = (
+        service.events()
+        .insert(calendarId=calendar_id, body=event_body, sendUpdates="all")
+        .execute()
+    )
     LOGGER.info(
         "Created calendar event %s for %s on %s.",
         created_event.get("id", event_id),
@@ -552,14 +638,19 @@ def main() -> None:
         )
         raise SystemExit(1)
 
+    month_start, month_end = parse_target_month(TARGET_MONTH or None)
+    attendees = parse_attendee_emails(ATTENDEE_EMAILS or None)
+    target_month_label = month_start.strftime("%Y-%m")
+
     LOGGER.info(
-        "Configured lookup address: house=%s street=%s zip=%s dry_run=%s weeks_ahead=%s calendar_id=%s",
+        "Configured lookup address: house=%s street=%s zip=%s dry_run=%s target_month=%s calendar_id=%s attendee_count=%s",
         HOUSE_NUMBER,
         STREET_NAME,
         ZIP_CODE or "<not-set>",
         DRY_RUN,
-        WEEKS_AHEAD,
+        target_month_label,
         CALENDAR_ID,
+        len(attendees),
     )
     LOGGER.info("Timezone configured: %s", TZ.key)
     LOGGER.info("PGH.ST locate endpoint template: %s", PGHST_LOCATE_URL_TEMPLATE)
@@ -575,22 +666,25 @@ def main() -> None:
         "Parsed schedule: %s",
         json.dumps(normalized_schedule, default=json_default, sort_keys=True),
     )
-    refuse_dates = get_upcoming_dates(
+    refuse_dates = get_month_pickup_dates(
         normalized_schedule["refuse_day"],
-        WEEKS_AHEAD,
+        month_start,
+        month_end,
         anchor_date=normalized_schedule["refuse_anchor_date"],
     )
     LOGGER.info(
-        "Upcoming refuse dates: %s",
+        "Monthly refuse dates for %s: %s",
+        target_month_label,
         ", ".join(pickup_date.isoformat() for pickup_date in refuse_dates) or "<none>",
     )
-    events_to_create = build_events_to_create(normalized_schedule, WEEKS_AHEAD)
+    events_to_create = build_events_to_create(normalized_schedule, month_start, month_end)
     if not events_to_create:
         LOGGER.warning(
-            "No pickup events were generated. Check the normalized schedule fields and WEEKS_AHEAD."
+            "No pickup events were generated for %s. Check the normalized schedule fields and TARGET_MONTH.",
+            target_month_label,
         )
         return
-    LOGGER.info("Planned pickup events: %s", len(events_to_create))
+    LOGGER.info("Planned pickup events for %s: %s", target_month_label, len(events_to_create))
     for event_type, pickup_date in events_to_create:
         LOGGER.info("%s %s -> %s", EVENT_EMOJIS[event_type], event_type, pickup_date.isoformat())
 
@@ -599,7 +693,10 @@ def main() -> None:
         for event_type, pickup_date in events_to_create:
             LOGGER.info(
                 "DRY_RUN event payload: %s",
-                json.dumps(build_event_body(event_type, pickup_date), sort_keys=True),
+                json.dumps(
+                    build_event_body_with_attendees(event_type, pickup_date, attendees),
+                    sort_keys=True,
+                ),
             )
         return
 
@@ -612,7 +709,13 @@ def main() -> None:
 
     for event_type, pickup_date in events_to_create:
         try:
-            created = create_pickup_event(service, event_type, pickup_date, CALENDAR_ID)
+            created = create_pickup_event(
+                service,
+                event_type,
+                pickup_date,
+                CALENDAR_ID,
+                attendees,
+            )
         except HttpError as exc:
             LOGGER.error(
                 "Failed to create %s event for %s: %s",
