@@ -31,9 +31,9 @@ jobs:
 
       - name: Run dry-run smoke test
         env:
-          HOUSE_NUMBER: 626
-          STREET_NAME: Bellefonte St
-          ZIP_CODE: 15232
+          HOUSE_NUMBER: 320
+          STREET_NAME: S Craig St
+          ZIP_CODE: 15213
           CALENDAR_ID: primary
           TARGET_MONTH: 2026-03
           ATTENDEE_EMAILS: roommate1@example.com,roommate2@example.com

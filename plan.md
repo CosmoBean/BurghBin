@@ -85,7 +85,7 @@ A self-hosted, zero-cost system that queries the [PGH.ST](https://pgh.st) API fo
                                                                                                                                                                                     - PGH.ST URL templates
                                                                                                                                                                                     - [ ] Add logging setup (basicConfig, format with timestamp)
                                                                                                                                                                                     - [ ] In `main()`, validate that HOUSE_NUMBER and STREET_NAME are set, log them
-                                                                                                                                                                                    - [ ] Verify: `HOUSE_NUMBER=626 STREET_NAME="Bellefonte St" python main.py` logs the address
+                                                                                                                                                                                    - [ ] Verify: `HOUSE_NUMBER=320 STREET_NAME="S Craig St" python main.py` logs the address
                                                                                                                                                                                     - [ ] Commit
 
                                                                                                                                                                                     ### Commit 2.2: `feat(api): add PGH.ST /locate/ endpoint client`

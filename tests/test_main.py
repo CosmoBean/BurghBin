@@ -10,10 +10,10 @@ import main
 
 
 SAMPLE_RAW_SCHEDULE = {
-    "division": "EASTERN",
+    "division": "CENTRAL",
     "division_sched": 0,
     "holiday_cancellation": False,
-    "hood": "Shadyside",
+    "hood": "North Oakland",
     "next_pickup_date": "3-11-2026",
     "next_pickup_date_long": "Wednesday, March 11th",
     "next_recycling": "The next pickup is trash only.",
@@ -21,11 +21,11 @@ SAMPLE_RAW_SCHEDULE = {
     "next_recycling_date_long": "Wednesday, March 11th",
     "next_yard_date": "4-25-2026",
     "next_yard_date_long": "Saturday, April 25th",
-    "number": "626",
+    "number": "320",
     "other_cancellation": False,
     "regular_trash_pickup_day": 2,
-    "street": "BELLEFONTE ST",
-    "zip": 15232,
+    "street": "S CRAIG ST",
+    "zip": 15213,
 }
 
 

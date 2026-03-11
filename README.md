@@ -50,9 +50,9 @@ python -m pip install -r requirements.txt
 Copy `.env.example` into your preferred local env loader, or export the values directly:
 
 ```bash
-export HOUSE_NUMBER=626
-export STREET_NAME="Bellefonte St"
-export ZIP_CODE=15232
+export HOUSE_NUMBER=320
+export STREET_NAME="S Craig St"
+export ZIP_CODE=15213
 export CALENDAR_ID=primary
 export GOOGLE_SERVICE_ACCOUNT_FILE=./service-account.json
 export TARGET_MONTH=2026-03
@@ -113,7 +113,7 @@ Useful commands:
 python -m py_compile main.py
 python -c "import main"
 pytest
-TARGET_MONTH=2026-03 ATTENDEE_EMAILS="roommate1@example.com,roommate2@example.com" DRY_RUN=true HOUSE_NUMBER=626 STREET_NAME="Bellefonte St" ZIP_CODE=15232 python main.py
+TARGET_MONTH=2026-03 ATTENDEE_EMAILS="roommate1@example.com,roommate2@example.com" DRY_RUN=true HOUSE_NUMBER=320 STREET_NAME="S Craig St" ZIP_CODE=15213 python main.py
 ```
 
 ## Holiday Handling
