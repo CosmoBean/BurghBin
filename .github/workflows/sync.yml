@@ -1,0 +1,44 @@
+name: Sync Trash Reminders
+
+on:
+  schedule:
+    - cron: "0 1 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run without creating Google Calendar events.
+        required: false
+        default: false
+        type: boolean
+      weeks_ahead:
+        description: Number of pickup occurrences to generate.
+        required: false
+        default: "4"
+        type: string
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run schedule sync
+        env:
+          HOUSE_NUMBER: ${{ secrets.HOUSE_NUMBER }}
+          STREET_NAME: ${{ secrets.STREET_NAME }}
+          ZIP_CODE: ${{ secrets.ZIP_CODE }}
+          CALENDAR_ID: ${{ secrets.CALENDAR_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_CALENDAR_OWNER_EMAIL: ${{ secrets.GOOGLE_CALENDAR_OWNER_EMAIL }}
+          WEEKS_AHEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.weeks_ahead || '4' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: python main.py
