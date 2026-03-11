@@ -3,10 +3,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
+
+import requests
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -39,14 +43,68 @@ TZ = ZoneInfo("America/New_York")
 PGHST_BASE_URL = "https://pgh.st"
 PGHST_LOCATE_URL_TEMPLATE = f"{PGHST_BASE_URL}/locate/{{house}}/{{street}}/"
 PGHST_LOCATE_WITH_ZIP_URL_TEMPLATE = (
-    f"{PGHST_BASE_URL}/locate/{{house}}/{{street}}/{{zip_code}}/"
+    f"{PGHST_BASE_URL}/locate/{{house}}/{{street}}/{{zip_code}}"
 )
+PGHST_HEADERS = {
+    "Accept": "application/json",
+    "Referer": "https://pgh.st/",
+    "User-Agent": "pgh-trash-reminders/1.0",
+    "X-Requested-With": "XMLHttpRequest",
+}
+REQUEST_TIMEOUT_SECONDS = 15
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
 )
 LOGGER = logging.getLogger("pgh-trash-reminders")
+
+
+def build_locate_url(house: str, street: str, zip_code: str = "") -> str:
+    """Build the PGH.ST locate URL."""
+    encoded_street = quote(street.strip(), safe="")
+    if zip_code.strip():
+        return PGHST_LOCATE_WITH_ZIP_URL_TEMPLATE.format(
+            house=house.strip(),
+            street=encoded_street,
+            zip_code=zip_code.strip(),
+        )
+    return PGHST_LOCATE_URL_TEMPLATE.format(
+        house=house.strip(),
+        street=encoded_street,
+    )
+
+
+def fetch_schedule(house: str, street: str, zip_code: str = "") -> object:
+    """Fetch the raw schedule payload from PGH.ST."""
+    candidate_urls = [build_locate_url(house, street, zip_code)]
+    if zip_code.strip():
+        candidate_urls.append(build_locate_url(house, street))
+
+    last_error: Exception | None = None
+    for index, url in enumerate(candidate_urls, start=1):
+        LOGGER.info("Fetching PGH.ST schedule from %s", url)
+        response = requests.get(
+            url,
+            headers=PGHST_HEADERS,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            LOGGER.warning(
+                "PGH.ST returned a non-JSON response for candidate %s/%s; trying the next URL.",
+                index,
+                len(candidate_urls),
+            )
+            continue
+
+        LOGGER.info("Raw PGH.ST response: %s", json.dumps(payload, sort_keys=True))
+        return payload
+
+    raise RuntimeError("PGH.ST did not return JSON for any locate URL candidate.") from last_error
 
 
 def main() -> None:
@@ -71,7 +129,10 @@ def main() -> None:
     )
     LOGGER.info("Timezone configured: %s", TZ.key)
     LOGGER.info("PGH.ST locate endpoint template: %s", PGHST_LOCATE_URL_TEMPLATE)
-    LOGGER.info("Phase 2.1 complete; fetch logic will be added next.")
+
+    raw_schedule = fetch_schedule(HOUSE_NUMBER, STREET_NAME, ZIP_CODE)
+    LOGGER.info("Fetched raw schedule type: %s", type(raw_schedule).__name__)
+    print(json.dumps(raw_schedule, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
