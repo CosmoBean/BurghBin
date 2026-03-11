@@ -191,7 +191,10 @@ def fetch_schedule(house: str, street: str, zip_code: str = "") -> object:
         LOGGER.info("Raw PGH.ST response: %s", json.dumps(payload, sort_keys=True))
         return payload
 
-    raise RuntimeError("PGH.ST did not return JSON for any locate URL candidate.") from last_error
+    raise RuntimeError(
+        "PGH.ST did not return JSON for any locate URL candidate. "
+        "Check the address formatting and ZIP code."
+    ) from last_error
 
 
 def parse_pghst_date(value: Any) -> date | None:
@@ -401,15 +404,23 @@ def load_service_account_info() -> dict[str, Any]:
     """Load Google service account credentials from env JSON or a local file."""
     if GOOGLE_SERVICE_ACCOUNT_JSON:
         LOGGER.info("Loading Google service account credentials from GOOGLE_SERVICE_ACCOUNT_JSON.")
-        return json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+        try:
+            return json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+        except json.JSONDecodeError as exc:
+            raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON.") from exc
 
     if GOOGLE_SERVICE_ACCOUNT_FILE:
         LOGGER.info(
             "Loading Google service account credentials from file: %s",
             GOOGLE_SERVICE_ACCOUNT_FILE,
         )
-        with open(GOOGLE_SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as handle:
-            return json.load(handle)
+        try:
+            with open(GOOGLE_SERVICE_ACCOUNT_FILE, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except FileNotFoundError as exc:
+            raise ValueError(
+                f"GOOGLE_SERVICE_ACCOUNT_FILE was set, but {GOOGLE_SERVICE_ACCOUNT_FILE!r} was not found."
+            ) from exc
 
     raise ValueError(
         "Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SERVICE_ACCOUNT_FILE before creating calendar events."
@@ -554,20 +565,31 @@ def main() -> None:
     LOGGER.info("PGH.ST locate endpoint template: %s", PGHST_LOCATE_URL_TEMPLATE)
 
     raw_schedule = fetch_schedule(HOUSE_NUMBER, STREET_NAME, ZIP_CODE)
-    LOGGER.info("Fetched raw schedule type: %s", type(raw_schedule).__name__)
-    print(json.dumps(raw_schedule, indent=2, sort_keys=True))
+    if isinstance(raw_schedule, list):
+        LOGGER.info("Fetched %s schedule record(s) from PGH.ST.", len(raw_schedule))
+    else:
+        LOGGER.info("Fetched a %s schedule payload from PGH.ST.", type(raw_schedule).__name__)
 
     normalized_schedule = normalize_schedule(raw_schedule)
     LOGGER.info(
         "Parsed schedule: %s",
         json.dumps(normalized_schedule, default=json_default, sort_keys=True),
     )
-    refuse_dates = get_upcoming_dates(normalized_schedule["refuse_day"], WEEKS_AHEAD)
+    refuse_dates = get_upcoming_dates(
+        normalized_schedule["refuse_day"],
+        WEEKS_AHEAD,
+        anchor_date=normalized_schedule["refuse_anchor_date"],
+    )
     LOGGER.info(
         "Upcoming refuse dates: %s",
         ", ".join(pickup_date.isoformat() for pickup_date in refuse_dates) or "<none>",
     )
     events_to_create = build_events_to_create(normalized_schedule, WEEKS_AHEAD)
+    if not events_to_create:
+        LOGGER.warning(
+            "No pickup events were generated. Check the normalized schedule fields and WEEKS_AHEAD."
+        )
+        return
     LOGGER.info("Planned pickup events: %s", len(events_to_create))
     for event_type, pickup_date in events_to_create:
         LOGGER.info("%s %s -> %s", EVENT_EMOJIS[event_type], event_type, pickup_date.isoformat())
@@ -617,6 +639,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except ValueError as exc:
-        LOGGER.error("%s", exc)
+    except (ValueError, RuntimeError, requests.RequestException) as exc:
+        LOGGER.error("Run failed: %s", exc)
         sys.exit(1)
