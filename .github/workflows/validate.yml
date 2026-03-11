@@ -26,12 +26,16 @@ jobs:
       - name: Verify module import
         run: python -c "import main"
 
+      - name: Run unit tests
+        run: pytest
+
       - name: Run dry-run smoke test
         env:
           HOUSE_NUMBER: 626
           STREET_NAME: Bellefonte St
           ZIP_CODE: 15232
           CALENDAR_ID: primary
+          TARGET_MONTH: 2026-03
+          ATTENDEE_EMAILS: roommate1@example.com,roommate2@example.com
           DRY_RUN: true
-          WEEKS_AHEAD: 2
         run: python main.py
